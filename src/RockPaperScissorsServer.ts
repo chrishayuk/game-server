@@ -18,59 +18,191 @@ export class RockPaperScissorsServer {
       this.checkGameInProgressStrategy
     );
 
-    // Set the callback for when a game is resolved
-    this.gameServer.onGameResolved = (playerId, result) => {
-      const ws = this.connectionManager.getConnection(playerId);
-      if (ws) {
-        ws.send(`Game over. You ${result.outcome}. Opponent chose ${result.opponentMove}.`);
-      } else {
-        console.error(`Connection not found for player ID: ${playerId}`);
-      }
+    // game resolved
+    this.gameServer.onGameResolved = (outcomes) => {
+      outcomes.forEach(result => {
+        const ws = this.connectionManager.getConnection(result.playerId);
+        if (ws) {
+          ws.send(`Game ${result.gameId}: Game over. You ${result.outcome}. Opponent chose ${result.opponentMove}.`);
+          // Handle starting a new game outside of this loop to avoid duplicating the logic
+        } else {
+          console.error(`Connection not found for player ID: ${result.playerId}`);
+        }
+      });
+    
+      // Start a new game with a delay after resolving the last game
+      setTimeout(() => {
+        this.startNewGameWithPlayers(outcomes[0].gameId); // Assuming the game ID is the same for both outcomes
+      }, 1000);
     };
+  }
+
+  // start new game with players
+  private startNewGameWithPlayers(oldGameId: string): void {
+    // Get the players from the old game before it's ended
+    const players = new Set(this.gameServer.getPlayersInGame(oldGameId));
+
+    // End the old game
+    this.gameServer.endGame(oldGameId);
+
+    // If we have the correct number of players, start a new game
+    if (players.size === 2) {
+      // Create a new game
+      const newGameId = this.gameServer.createGame();
+
+      // Add the players to the new game
+      for (const playerId of players) {
+        this.gameServer.addPlayerToGame(playerId, newGameId);
+        this.connectionManager.sendMessage(
+          playerId,
+          `Game ${newGameId}: A new game has started. Please play 'rock', 'paper', or 'scissors'.`
+        );
+      }
+
+      // Attempt to start the new game
+      this.tryStartGame(newGameId);
+    } else {
+      console.error(
+        `Game ${oldGameId} could not start a new game with the players because of a mismatched player count.`
+      );
+    }
   }
 
   // handle new player
   public handleNewPlayer(playerId: string, ws: ServerWebSocket<unknown>) {
     // add the connection
     this.connectionManager.addConnection(playerId, ws);
-    //console.debug(`Player connected: ${playerId}`);
-  
+    console.debug(`Player connected: ${playerId}`);
+
+    // place the player in the game
+    const gameId = this.placePlayerInGame(playerId);
+
+    // start the game
+    this.tryStartGame(gameId);
+  }
+
+  private placePlayerInGame(playerId: string): string {
     let gameId: string;
-  
-    // Check if there is a game waiting for a second player
+
+    // Check if there's a waiting game
     if (this.waitingGames.length > 0) {
       // Join the first waiting game
       gameId = this.waitingGames.shift()!;
-      this.gameServer.addPlayerToGame(playerId, gameId);
-      //console.debug(`Player ${playerId} added to existing game ${gameId}`); // Debug log for joining existing game
-    } else {
-      // No games are waiting, so create a new one
-      gameId = this.gameServer.createGame();
-      this.gameServer.addPlayerToGame(playerId, gameId);
-      
-      // Since this is a new game with only one player, add it to the waiting list
-      this.waitingGames.push(gameId);
-      //console.debug(`Player ${playerId} added to new game ${gameId}`); // Debug log for creating a new game
-    }
-  
-    // Welcome message and check if the game can start now
-    this.connectionManager.sendMessage(playerId, `Game ${gameId}: Welcome! You are Player ${playerId}.`);
-    //console.debug(`Welcome message sent to Player ${playerId} for Game ${gameId}`); // Debug log for welcome message
-    this.tryStartGame(gameId);
-  }
-  
 
-  // try start the game
-  private tryStartGame(gameId: string) {
-    // are we ready to start
-    if (this.gameServer.isGameReadyToStart(gameId)) {
-      // start the game
-      this.notifyPlayersAndStartGame(gameId);
+      // add the player to the game
+      this.gameServer.addPlayerToGame(playerId, gameId);
+      console.log(`Game ${gameId}: Player ${playerId} added to existing game.`);
     } else {
-      // Use the new function to send a message to all players in the game
+      // Create a new game if there isn't one waiting
+      gameId = this.gameServer.createGame();
+
+      // add the player to the game
+      this.gameServer.addPlayerToGame(playerId, gameId);
+      console.log(
+        `Game ${gameId}: Player ${playerId} created and added to new game.`
+      );
+      this.waitingGames.push(gameId);
+    }
+
+    // Send a single welcome message here
+    this.connectionManager.sendMessage(
+      playerId,
+      `Game ${gameId}: Welcome! You are Player ${playerId}.`
+    );
+
+    // If the game does not have enough players yet, send a waiting message
+    if (this.gameServer.getPlayersInGame(gameId)?.size === 1) {
+      // waiting for an opponent
+      this.connectionManager.sendMessage(
+        playerId,
+        `Game ${gameId}: Waiting for an opponent...`
+      );
+    } else if (this.gameServer.getPlayersInGame(gameId)?.size === 2) {
+      // If two players are now in the game, notify them of their opponent
+      this.notifyPlayersOfOpponents(gameId);
+    }
+
+    // return the game
+    return gameId;
+  }
+
+  private isGameReadyToStart(gameId: string): boolean {
+    // get the game
+    const game = this.gameServer.getGame(gameId);
+
+    // no game
+    if (!game) return false;
+
+    // The game is ready to start if there are enough players, e.g., 2 for RPS
+    return game.players.size === 2;
+  }
+
+  private notifyPlayersOfOpponents(gameId: string): void {
+    // get the the players in the game
+    const playersInGame = this.gameServer.getPlayersInGame(gameId);
+
+    // ensure it's a 2 player game
+    if (playersInGame && playersInGame.size === 2) {
+      // loop through the players
+      playersInGame.forEach((pid) => {
+        // get the opponent id
+        const opponentId = this.getOpponentId(gameId, pid);
+
+        // if it's an opponent
+        if (opponentId) {
+          // send the message
+          this.connectionManager.sendMessage(
+            pid,
+            `Game ${gameId}: Your opponent is player ${opponentId}.`
+          );
+        } else {
+          // couldn't find
+          console.error(
+            `Game ${gameId}: Could not find an opponent for player ${pid}.`
+          );
+        }
+      });
+    }
+  }
+
+  // get the opponent
+  private getOpponentId(gameId: string, playerId: string): string | null {
+    // get the players in the game
+    const playersInGame = this.gameServer.getPlayersInGame(gameId);
+
+    // no players
+    if (!playersInGame) {
+      console.error(`Game ${gameId}: Game does not exist or has no players.`);
+      return null;
+    }
+
+    // loop through the players
+    for (const pid of playersInGame) {
+      // check if they're not equal
+      if (pid !== playerId) {
+        // Found the opponent
+        return pid;
+      }
+    }
+
+    // No opponent found (shouldn't happen in a two-player game)
+    return null;
+  }
+
+  // Call this method when you need to check if the game can start and notify players accordingly
+  public tryStartGame(gameId: string): void {
+    // Check if the game is ready to start
+    const game = this.gameServer.getGame(gameId);
+
+    // ensure we are ready to start the game
+    if (game && this.gameServer.isGameReadyToStart(gameId)) {
+      // Start the game and notify players
+      this.gameServer.startGame(gameId);
+
+      // send message to players in the game
       this.sendMessageToPlayersInGame(
         gameId,
-        `Game ${gameId}: Waiting for more players to start the game...`
+        `Game ${gameId}: The game is starting. Please play 'rock', 'paper', or 'scissors'`
       );
     }
   }
@@ -89,122 +221,161 @@ export class RockPaperScissorsServer {
       });
     } else {
       // no game or players
-      console.error(`Game with ID ${gameId} does not exist or has no players.`);
+      console.error(`Game ${gameId}: Game does not exist or has no players.`);
     }
   }
 
-  // start the game
-  private notifyPlayersAndStartGame(gameId: string) {
-    // get players in the game
-    const playersInGame = this.gameServer.getPlayersInGame(gameId);
-
-    // debug
-    //console.debug(`Attempting to start game with ID: ${gameId}`); // Debugging log
-
-    // do we have players
-    if (playersInGame && playersInGame.size === 2) {
-      // Use the new function to notify players that the game is starting
-      this.sendMessageToPlayersInGame(
-        gameId,
-        `Game ${gameId}: Game is starting. Please play 'rock', 'paper', or 'scissors'.`
-      );
-
-      // Start the game
-      this.gameServer.startGame(gameId);
-    } else {
-      // not ready to start
-      console.error(`Game with ID ${gameId} is not ready to start.`);
-    }
-  }
-
+  // handle the player disconnection
   public handlePlayerDisconnection(playerId: string) {
-    // get the game
+    // get the game id for the player
     const gameId = this.gameServer.getPlayerGame(playerId);
 
-    // we have a game
+    // check we have a game
     if (gameId) {
-      // remove the player
-      this.gameServer.removePlayerFromGame(playerId);
-      this.connectionManager.removeConnection(playerId);
+      // get the opponent
+      const otherPlayerId = this.gameServer.getOpponentPlayerId(playerId);
 
-      // ensure we don't have a game in progress
-      if (!this.gameServer.isGameInProgress(gameId)) {
-        // end the game
-        this.gameServer.endGame(gameId);
-
-        // Use the new function to broadcast the disconnection message to the game
-        this.sendMessageToPlayersInGame(
-          gameId,
-          `Game ${gameId}: Player ${playerId} has left the game. Waiting for a new opponent...`
+      // get the other player
+      if (otherPlayerId) {
+        // opponent disconnected
+        this.connectionManager.sendMessage(
+          otherPlayerId,
+          `Game ${gameId}: Your opponent has disconnected. The game has been ended.`
         );
+        this.placePlayerInGame(otherPlayerId); // Reuse the new function
       }
+
+      // end the game
+      this.gameServer.endGame(gameId);
+
+      // remove the player
+      this.connectionManager.removeConnection(playerId);
     } else {
-      // Handle the case where there is no game associated with the player
+      // disconnected
+      console.debug(`Player ${playerId} disconnected without being in a game.`);
     }
+
+    // remove the player from the game
+    this.gameServer.removePlayerFromGame(playerId);
   }
 
   public handlePlayerMessage(playerId: string, message: unknown) {
+    // Attempt to parse the message as a move
     const move = this.parseMessage(message);
-    if (move) {
-      this.gameServer.addPlayerMove(playerId, move);
-    } else {
+
+    // Get the game id for the player
+    const gameId = this.gameServer.getPlayerGame(playerId);
+
+    // TODO: in the future may add the ability to ask non game questions
+
+    // no game found
+    if (!gameId) {
+      // player is not in a game
+      console.error(`Player ${playerId} is not associated with any game.`);
+
+      // send a message to say you're not in a game
       this.connectionManager.sendMessage(
         playerId,
-        "Invalid choice. Please play 'rock', 'paper', or 'scissors'."
+        "You are not currently in a game."
+      );
+      return;
+    }
+
+    // Check if we have a valid move and a valid game
+    if (move && gameId) {
+      // Add the player's move to the game
+      this.gameServer.addPlayerMove(playerId, move);
+
+      // Log the move
+      console.log(`Game ${gameId}: Player ${playerId} played ${move}`);
+
+      // Retrieve the game object for the player
+      const game = this.gameServer.getGame(gameId);
+
+      // Ensure the game exists and check if the game is resolvable
+      if (game && this.shouldResolveGame(game)) {
+        // If the game is ready to be resolved according to RPS logic, resolve the game
+        this.gameServer.resolveGame(game);
+      } else {
+        // If the game is not yet resolvable, notify the player to wait
+        this.connectionManager.sendMessage(
+          playerId,
+          `Game ${gameId}: Waiting for the opponent's move.`
+        );
+      }
+    } else {
+      // If the move is not valid, notify the player with the specific game ID
+      this.connectionManager.sendMessage(
+        playerId,
+        `Game ${gameId}: Invalid choice. Please play 'rock', 'paper', or 'scissors'.`
+      );
+
+      // Log the invalid move attempt
+      console.warn(
+        `Game ${gameId}: Player ${playerId} made an invalid move: ${message}`
       );
     }
   }
 
+  // Specific RPS logic to determine if the game should be resolved
+  private shouldResolveGame(game: Game<PlayerMove, GameOutcome>): boolean {
+    // RPS game resolves when we have 2 moves
+    return game.playersMoves.size === 2;
+  }
+
+  // parse the message
   private parseMessage(message: unknown): PlayerMove | null {
+    // parse the move
     const move =
       typeof message === "string" ? message.trim().toLowerCase() : null;
+
+    // check it's valid
     return this.isValidChoice(move) ? move : null;
   }
 
+  // check the move is valid
   private isValidChoice(move: string | null): move is PlayerMove {
+    // it's gotta be rock, paper or scissors
     return ["rock", "paper", "scissors"].includes(move || "");
   }
 
   private resolveGameStrategy: ResolveGameStrategy<PlayerMove, GameOutcome> = (
     game: Game<PlayerMove, GameOutcome>,
-    onGameResolved: (playerId: string, result: GameResult<PlayerMove, GameOutcome>) => void
+    onGameResolved: (outcomes: GameResult<PlayerMove, GameOutcome>[]) => void
   ) => {
     // Ensure we have two moves before resolving
-    if (game.playersMoves.size < 2) {
-      return; // Not enough players have made their moves to resolve the game
-    }
+    if (game.playersMoves.size === 2) {
+      // Extract the player IDs and moves from the game state
+      const [player1Id, player2Id] = Array.from(game.players);
+      const player1Move = game.playersMoves.get(player1Id) as PlayerMove;
+      const player2Move = game.playersMoves.get(player2Id) as PlayerMove;
   
-    // Extract the player IDs and moves from the game state
-    const [player1Id, player2Id] = Array.from(game.players);
-    const player1Move = game.playersMoves.get(player1Id);
-    const player2Move = game.playersMoves.get(player2Id);
-
-    // Define the outcomes matrix
-    const outcomes = {
-      rock: { rock: "draw", paper: "lose", scissors: "win" },
-      paper: { rock: "win", paper: "draw", scissors: "lose" },
-      scissors: { rock: "lose", paper: "win", scissors: "draw" },
-    };
-
-    // Use the game ID from the gameServer context
-    const gameId = this.gameServer.gameId;
-
-    const gameResult: Record<string, GameResult<PlayerMove, GameOutcome>> = {
-      [player1Id]: {
-        outcome: outcomes[player1Move][player2Move] as GameOutcome,
-        opponentMove: player2Move,
-        gameId: gameId!, // Asserting gameId is not null
-      },
-      [player2Id]: {
-        outcome: outcomes[player2Move][player1Move] as GameOutcome,
-        opponentMove: player1Move,
-        gameId: gameId!, // Asserting gameId is not null
-      },
-    };
-
-    // Resolve the game for both players
-    onGameResolved(player1Id, gameResult[player1Id]);
-    onGameResolved(player2Id, gameResult[player2Id]);
+      // Define the outcomes matrix
+      const outcomes = {
+        rock: { rock: "draw", paper: "lose", scissors: "win" },
+        paper: { rock: "win", paper: "draw", scissors: "lose" },
+        scissors: { rock: "lose", paper: "win", scissors: "draw" },
+      };
+  
+      // Create the game results for both players
+      const playerOutcomes = [
+        {
+          playerId: player1Id,
+          outcome: outcomes[player1Move][player2Move] as GameOutcome,
+          opponentMove: player2Move,
+          gameId: game.gameId,
+        },
+        {
+          playerId: player2Id,
+          outcome: outcomes[player2Move][player1Move] as GameOutcome,
+          opponentMove: player1Move,
+          gameId: game.gameId,
+        },
+      ];
+  
+      // Call the game resolution once with all outcomes
+      onGameResolved(playerOutcomes);
+    }
   };
 
   private checkGameInProgressStrategy: CheckGameInProgressStrategy<PlayerMove> =
