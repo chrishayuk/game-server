@@ -1,0 +1,34 @@
+{
+  "name": "game-server",
+  "version": "1.0.0",
+  "description": "A WebSocket server for a Rock-Paper-Scissors multiplayer game.",
+  "module": "src/index.tsx",
+  "type": "module",
+  "author": "Chris Hay",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrishayuk/game-server.git"
+  },
+  "keywords": [
+    "rock-paper-scissors",
+    "game",
+    "websocket",
+    "server",
+    "multiplayer"
+  ],
+  "bugs": {
+    "url": "https://github.com/chrishayuk/game-server/issues"
+  },
+  "homepage": "https://github.com/chrishay/game-server#readme",
+  "devDependencies": {
+    "bun-types": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@types/uuid": "^9.0.6",
+    "uuid": "^9.0.1"
+  }
+}
