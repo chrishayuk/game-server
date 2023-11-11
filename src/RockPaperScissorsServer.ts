@@ -18,23 +18,25 @@ export class RockPaperScissorsServer {
       this.checkGameInProgressStrategy
     );
 
-    // game resolved
-    this.gameServer.onGameResolved = (outcomes) => {
-      outcomes.forEach(result => {
-        const ws = this.connectionManager.getConnection(result.playerId);
-        if (ws) {
-          ws.send(`Game ${result.gameId}: Game over. You ${result.outcome}. Opponent chose ${result.opponentMove}.`);
-          // Handle starting a new game outside of this loop to avoid duplicating the logic
-        } else {
-          console.error(`Connection not found for player ID: ${result.playerId}`);
-        }
-      });
-    
-      // Start a new game with a delay after resolving the last game
-      setTimeout(() => {
-        this.startNewGameWithPlayers(outcomes[0].gameId); // Assuming the game ID is the same for both outcomes
-      }, 1000);
-    };
+    this.gameServer.onGameResolved = this.handleGameResolved.bind(this);
+  }
+
+  private handleGameResolved(outcomes: GameResult<PlayerMove, GameOutcome>[]): void {
+    outcomes.forEach((result) => {
+      this.connectionManager.sendMessage(
+        result.playerId,
+        `Game ${result.gameId}: Game over. You ${result.outcome}. Opponent chose ${result.opponentMove}.`
+      );
+    });
+
+    // Start a new game after all players have been notified
+    this.scheduleNewGameStart(outcomes[0].gameId);
+  }
+
+  private scheduleNewGameStart(gameId: string): void {
+    setTimeout(() => {
+      this.startNewGameWithPlayers(gameId);
+    }, 1000);
   }
 
   // start new game with players
@@ -343,7 +345,7 @@ export class RockPaperScissorsServer {
     game: Game<PlayerMove, GameOutcome>,
     onGameResolved: (outcomes: GameResult<PlayerMove, GameOutcome>[]) => void
   ) => {
-    // Ensure we have two moves before resolving
+    // Check if we have two moves to resolve the game
     if (game.playersMoves.size === 2) {
       // Extract the player IDs and moves from the game state
       const [player1Id, player2Id] = Array.from(game.players);
@@ -377,7 +379,7 @@ export class RockPaperScissorsServer {
       onGameResolved(playerOutcomes);
     }
   };
-
+  
   private checkGameInProgressStrategy: CheckGameInProgressStrategy<PlayerMove> =
     (playersMoves: any) => {
       // Implement the logic to check if the game is in progress

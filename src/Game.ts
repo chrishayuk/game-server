@@ -2,6 +2,7 @@ export type GameResult<TMove, TOutcome> = {
   outcome: TOutcome;
   opponentMove: TMove;
   gameId: string;
+  playerId: string; 
 };
 
 // the game state

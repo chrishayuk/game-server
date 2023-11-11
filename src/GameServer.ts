@@ -3,11 +3,9 @@
 
   export type ResolveGameStrategy<TMove, TOutcome> = (
     game: Game<TMove, TOutcome>,
-    onGameResolved: (
-      playerId: string,
-      result: GameResult<TMove, TOutcome>
-    ) => void
+    onGameResolved: (outcomes: GameResult<TMove, TOutcome>[]) => void
   ) => void;
+  
 
   export type CheckGameInProgressStrategy<TMove> = (
     game: Game<TMove, TOutcome>
@@ -18,9 +16,10 @@
     private playerGameMapping: Map<string, string> = new Map();
     private resolveGameStrategy: ResolveGameStrategy<TMove, TOutcome>;
     private checkGameInProgressStrategy: CheckGameInProgressStrategy<TMove>;
-    public onGameResolved?: (outcomes: GameResult<TMove, TOutcome>[]) => void;
-
-
+    public onGameResolved?: (
+      outcomes: GameResult<TMove, TOutcome>[]
+    ) => void;
+    
     constructor(
       resolveGameStrategy: ResolveGameStrategy<TMove, TOutcome>,
       checkGameInProgressStrategy: CheckGameInProgressStrategy<TMove>
