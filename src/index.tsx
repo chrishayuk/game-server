@@ -1,9 +1,9 @@
 // index.tsx
 import { WebSocketConnectionManager } from "./WebSocketConnectionManager";
-import { RockPaperScissorsServer } from "./RockPaperScissorsServer";
+import { BotManager } from "./BotManager"; // Assuming you have a BotDirectory to manage bots
 
 const connectionManager = new WebSocketConnectionManager();
-const game = new RockPaperScissorsServer(connectionManager); // Pass the connection manager to the game
+const botManager = new BotManager(connectionManager); // Initialize the bot directory
 
 const server = Bun.serve({
   port: 3000,
@@ -15,45 +15,71 @@ const server = Bun.serve({
   },
   websocket: {
     open(ws) {
-      // Create the player ID
-      const playerId = crypto.randomUUID();
-      //console.debug(`Player connected: ${playerId}`);
-    
-      // Handle a new player joining the game
-      game.handleNewPlayer(playerId, ws);
+        // generate the client id
+        const clientId = crypto.randomUUID();
+        console.debug(`Connection opened: ${clientId}`);
+
+        // Register the connection in the connection manager
+        connectionManager.addConnection(clientId, ws);
     },
     message(ws, message) {
-      // get the player id from the connection
-      const playerId = connectionManager.getPlayerIdByConnection(ws);
+        // get the client id
+        const clientId = connectionManager.getPlayerIdByConnection(ws);
 
-      // ensure we have a player id
-      if (playerId) {
-        // received a message from a player
-        //console.debug(`Message from player ${playerId}: ${message}`);
+        // found the client
+        if (clientId) {
+            // parse the message
+            const messageString = typeof message === "string" ? message : new TextDecoder().decode(message);
 
-        // call the game's handle player message
-        game.handlePlayerMessage(playerId, message);
-      } else {
-        // message from an unknown connection
-        console.error(`Message from unknown connection: ${message}`);
-        ws.send("Unable to identify the player.");
-      }
+            // Check for direct message command
+            const directMessageRegex = /@([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s+(.+)/;
+            const match = messageString.match(directMessageRegex);
+
+            if (match) {
+              console.log("direct message");
+              const [, targetClientId, directMessage] = match;
+              connectionManager.sendDirectMessage(clientId, targetClientId, directMessage);
+            } else if (messageString.toLowerCase() === "who's connected?") {
+                // If the message is "who is connected", respond with the list of connected bots
+                console.log("who's connected");
+                const recentConnectedBots = botManager.listConnectedBots();
+
+                // return the list
+                connectionManager.sendMessage(clientId, `Recent Connected bots: ${recentConnectedBots.join(', ')}`);
+            } else if (messageString.toLowerCase().startsWith("register as ")) {
+                // get the command
+                const botName = messageString.substring("register as ".length).trim();
+
+                // Register the bot when it connects
+                botManager.registerBot(clientId, botName);
+            } else {
+                // we'll just echo for now
+                console.log("echo message");
+                ws.send(message);
+            }
+
+            // Route the message to the appropriate handler (bot or user)
+            //botDirectory.routeMessage(clientId, messageString);
+        } else {
+            console.error(`Message from unknown connection: ${message}`);
+            ws.send("Unable to identify the connection.");
+        }
     },
     close(ws) {
-      // get the player id
-      const playerId = connectionManager.getPlayerIdByConnection(ws);
+        // get the client id
+        const clientId = connectionManager.getPlayerIdByConnection(ws);
 
-      // ensure we have a player id
-      if (playerId) {
-        // disconnect the player from the game
-        //console.debug(`Player disconnected: ${playerId}`);
+        // we've got a client
+        if (clientId) {
+            // unregister the bot
+            botManager.unregisterBot(clientId);
 
-        // disconnect the player from the game
-        game.handlePlayerDisconnection(playerId);
-      } else {
-        // unknown connection
-        console.debug("Unknown connection closed");
-      }
+            // remove the connection
+            connectionManager.removeConnection(clientId);
+            console.debug(`Connection closed: ${clientId}`);
+        } else {
+            console.debug("Unknown connection closed");
+        }
     },
   },
 });

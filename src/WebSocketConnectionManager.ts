@@ -26,8 +26,9 @@ export class WebSocketConnectionManager {
 
   // adds a connection
   public addConnection(playerId: string, ws: ServerWebSocket<unknown>) {
-    // set the connection for the player
+    console.debug(`Adding connection for player: ${playerId}`);
     this.connections.set(playerId, ws);
+    console.debug(`Current connections: ${Array.from(this.connections.keys()).join(', ')}`);
   }
 
   // removes the connection
@@ -60,6 +61,7 @@ export class WebSocketConnectionManager {
       try {
         // Attempt to send the message
         ws.send(message);
+        console.debug(`Message sent to player ${playerId}: ${message}`);
       } catch (error) {
         // error sending message to the player
         console.error(`Error sending message to player ${playerId}:`, error);
@@ -67,8 +69,32 @@ export class WebSocketConnectionManager {
     } else {
       // no connection for the player found
       console.warn(`No connection found for player ${playerId}. Unable to send message.`);
+      console.debug(`Current connections: ${Array.from(this.connections.keys()).join(', ')}`);
     }
   }
+
+  // sends a direct message
+  public sendDirectMessage(senderId: string, receiverId: string, message: string) {
+    // get the receiver socket
+    const receiverWs = this.connections.get(receiverId);
+
+    // if we have a receiver
+    if (receiverWs) {
+      try {
+        // send the message
+        const messageWithSender = `from: ${senderId}, message: ${message}`;
+        receiverWs.send(messageWithSender);
+        console.debug(`Message from ${senderId} to ${receiverId}: ${message}`);
+      } catch (error) {
+        // error
+        console.error(`Error sending message from ${senderId} to ${receiverId}:`, error);
+      }
+    } else {
+      // no receiver
+      console.warn(`No connection found for receiver ${receiverId}.`);
+    }
+  }
+  
 
   // broadcast a message
   public broadcastMessage(message: string) {
